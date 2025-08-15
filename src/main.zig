@@ -301,27 +301,49 @@ pub fn main() !void {
 
     var args = std.process.args();
     _ = args.next(); // exe name
-    const expr = args.next() orelse {
-        std.debug.print("usage: calc <expr>\n", .{});
-    return;
-    };
+
+    var show_tokens = false;
+    var show_ast = false;
+    var expr: []const u8 = undefined;
+    var expr_set = false;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--tokens")) {
+            show_tokens = true;
+        } else if (std.mem.eql(u8, arg, "--ast")) {
+            show_ast = true;
+        } else {
+            expr = arg;
+            expr_set = true;
+        }
+    }
+    
+    if (!expr_set) {
+        std.debug.print("usage: calc [--tokens] [--ast] <expr>\n", .{});
+        return;
+    }
 
     var toks = try tokenize(galloc, expr);
     defer toks.deinit();
 
-    for (toks.items) |t| switch (t.kind) {
-        .number => std.debug.print("NUMBER({d})\n", .{t.value}),
-        .add => std.debug.print("PLUS\n", .{}),
-        .sub => std.debug.print("MINUS\n", .{}),
-        .mul => std.debug.print("MUL\n", .{}),
-        .lparen => std.debug.print("(\n", .{}),
-        .rparen => std.debug.print(")\n", .{}),
-        .eof => std.debug.print("EOF\n", .{}),
-    };
+    if (show_tokens) {
+        for (toks.items) |t| switch (t.kind) {
+            .number => std.debug.print("NUMBER({d})\n", .{t.value}),
+            .add => std.debug.print("PLUS\n", .{}),
+            .sub => std.debug.print("MINUS\n", .{}),
+            .mul => std.debug.print("MUL\n", .{}),
+            .lparen => std.debug.print("(\n", .{}),
+            .rparen => std.debug.print(")\n", .{}),
+            .eof => std.debug.print("EOF\n", .{}),
+        };
+    }
 
     var p = Parser{ .tokens = toks.items, .alloc = ast_alloc };
     const ast = try p.parse();
-    printNode(ast, 0);
+    
+    if (show_ast) {
+        printNode(ast, 0);
+    }
 
     const result: i64 = try eval(ast);
     
