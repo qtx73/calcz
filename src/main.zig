@@ -235,11 +235,11 @@ const Guides = [MAX_DEPTH]bool;
 fn printNodeLabel(n: *const Node) void {
     switch (n.*) {
         .number => |v| std.debug.print("number({d})\n", .{v}),
-        .add => std.debug.print("Add\n", .{}),
-        .sub => std.debug.print("Sub\n", .{}),
-        .mul => std.debug.print("Mul\n", .{}),
-        .pos => std.debug.print("Pos\n", .{}),
-        .neg => std.debug.print("Neg\n", .{}),
+        .add => std.debug.print("add\n", .{}),
+        .sub => std.debug.print("sub\n", .{}),
+        .mul => std.debug.print("mul\n", .{}),
+        .pos => std.debug.print("pos\n", .{}),
+        .neg => std.debug.print("neg\n", .{}),
     }
 }
 
@@ -363,13 +363,13 @@ pub fn main() !void {
 
     if (show_tokens) {
         for (toks.items) |t| switch (t.kind) {
-            .number => std.debug.print("NUMBER({d})\n", .{t.value}),
-            .add => std.debug.print("PLUS\n", .{}),
-            .sub => std.debug.print("MINUS\n", .{}),
-            .mul => std.debug.print("MUL\n", .{}),
+            .number => std.debug.print("number({d})\n", .{t.value}),
+            .add => std.debug.print("add\n", .{}),
+            .sub => std.debug.print("sub\n", .{}),
+            .mul => std.debug.print("mul\n", .{}),
             .lparen => std.debug.print("(\n", .{}),
             .rparen => std.debug.print(")\n", .{}),
-            .eof => std.debug.print("EOF\n", .{}),
+            .eof => std.debug.print("eof\n", .{}),
         };
     }
 
