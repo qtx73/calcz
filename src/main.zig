@@ -23,8 +23,7 @@ fn isSpace(c: u8) bool {
     return c == ' ' or c == '\t';
 }
 
-fn tokenize(allocator: std.mem.Allocator, input: []const u8)
-    !std.ArrayList(Token) {
+fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Token) {
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
 
@@ -54,7 +53,7 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8)
             i += 1;
             continue;
         }
-        
+
         if (c == '(') {
             try tokens.append(.{ .kind = .lparen });
             i += 1;
@@ -106,9 +105,8 @@ fn newNumber(alloc: std.mem.Allocator, v: i64) ParseError!*Node {
     n.* = .{ .number = v };
     return n;
 }
-    
-fn newBinary(alloc: std.mem.Allocator, kind: NodeKind,
-    l: *Node, r: *Node) ParseError!*Node {
+
+fn newBinary(alloc: std.mem.Allocator, kind: NodeKind, l: *Node, r: *Node) ParseError!*Node {
     switch (kind) {
         .add, .sub, .mul => {},
         else => return error.InvalidBinaryKind,
@@ -123,11 +121,10 @@ fn newBinary(alloc: std.mem.Allocator, kind: NodeKind,
     return n;
 }
 
-fn newUnary(alloc: std.mem.Allocator, kind: NodeKind,
-    child: *Node) ParseError!*Node {
+fn newUnary(alloc: std.mem.Allocator, kind: NodeKind, child: *Node) ParseError!*Node {
     switch (kind) {
         .pos, .neg => {},
-        else => return error.InvalidUnaryKind
+        else => return error.InvalidUnaryKind,
     }
     const n = try alloc.create(Node);
     n.* = switch (kind) {
@@ -143,7 +140,7 @@ const Parser = struct {
     pos: usize = 0,
     alloc: std.mem.Allocator,
 
-    fn peek(self: *Parser) Token { 
+    fn peek(self: *Parser) Token {
         return self.tokens[self.pos];
     }
     fn advance(self: *Parser) void {
@@ -163,20 +160,18 @@ const Parser = struct {
     // Unary := ('+'|'-' Unary) | Primary
     // Primary :=  number | '(' Expr ')'
     fn parseAddSub(self: *Parser) ParseError!*Node {
-        var left = try self.parseUnary();
+        var left = try self.parseMul();
         while (true) {
             switch (self.peek().kind) {
                 .add => {
                     self.advance();
                     const right = try self.parseMul();
-                    left = try newBinary(self.alloc, 
-                        .add, left, right);
+                    left = try newBinary(self.alloc, .add, left, right);
                 },
                 .sub => {
                     self.advance();
                     const right = try self.parseMul();
-                    left = try newBinary(self.alloc, 
-                        .sub, left, right);
+                    left = try newBinary(self.alloc, .sub, left, right);
                 },
                 else => break,
             }
@@ -185,7 +180,7 @@ const Parser = struct {
     }
 
     fn parseMul(self: *Parser) ParseError!*Node {
-        var left = try self.parsePrimary();
+        var left = try self.parseUnary();
         while (self.peek().kind == .mul) {
             self.advance();
             const right = try self.parseUnary();
@@ -231,34 +226,74 @@ const Parser = struct {
     }
 };
 
-fn printNode(n: *const Node, indent: usize) void {
-    for (0..indent) |_| std.debug.print(" ", .{});
+// We draw vertical guide bars per depth.
+// Adjust if trees can be deeper.
+const MAX_DEPTH: usize = 128;
+const Guides = [MAX_DEPTH]bool;
+
+// Prints the textual label for a node.
+fn printNodeLabel(n: *const Node) void {
     switch (n.*) {
-        .number => |v| std.debug.print("Number({d})\n", .{v}),
-        .add => |b| {
-            std.debug.print("Add\n", .{});
-            printNode(b.left, indent + 1);
-            printNode(b.right, indent + 1);
-        },
-        .sub => |b| {
-            std.debug.print("Sub\n", .{});
-            printNode(b.left, indent + 1);
-            printNode(b.right, indent + 1);
-        },
-        .mul => |b| {
-            std.debug.print("Mul\n", .{});
-            printNode(b.left, indent + 1);
-            printNode(b.right, indent + 1);
-        },
-        .pos => |b| {
-            std.debug.print("Pos\n", .{});
-            printNode(b.child, indent + 1);
-        },
-        .neg => |b| {
-            std.debug.print("Neg\n", .{});
-            printNode(b.child, indent + 1);
-        },
+        .number => |v| std.debug.print("number({d})\n", .{v}),
+        .add => std.debug.print("Add\n", .{}),
+        .sub => std.debug.print("Sub\n", .{}),
+        .mul => std.debug.print("Mul\n", .{}),
+        .pos => std.debug.print("Pos\n", .{}),
+        .neg => std.debug.print("Neg\n", .{}),
     }
+}
+
+// Print indentation up `depth`, using `guides[i]` to decide
+// whether a vertical bar "|  " must be drawn at level `i`.
+fn printIndent(guides: *const Guides, depth: usize) void {
+    var i: usize = 0;
+    while (i < depth) : (i += 1) {
+        if (guides.*[i]) {
+            std.debug.print("|  ", .{});
+        } else {
+            std.debug.print("   ", .{});
+        }
+    }
+}
+
+// Recursively print the children of 'n' as an ASCII tree.
+fn printChildren(n: *const Node, guides: *Guides, depth: usize) void {
+    // Collect this node's children as a slice of pointers.
+    const children: []const *const Node = switch (n.*) {
+        .number => &[_]*const Node{},
+        .add => |b| &[_]*const Node{ b.left, b.right },
+        .sub => |b| &[_]*const Node{ b.left, b.right },
+        .mul => |b| &[_]*const Node{ b.left, b.right },
+        .pos => |b| &[_]*const Node{b.child},
+        .neg => |b| &[_]*const Node{b.child},
+    };
+
+    // Iterate with indices to know if a child is the last one.
+    for (children, 0..) |child, idx| {
+        const is_last = idx == children.len - 1;
+
+        // 1) Indentation for all ancestor depths.
+        printIndent(guides, depth);
+
+        // 2) Branch connector at this depth.
+        std.debug.print("{s}", .{if (is_last) "└── " else "├── "});
+
+        // 3) Child label itself.
+        printNodeLabel(child);
+
+        // 4) Let descendants know if a guide bar must continue at `depth`.
+        guides.*[depth] = !is_last;
+
+        // 5) Recurse into the child's subtree.
+        printChildren(child, guides, depth + 1);
+    }
+}
+
+// Entry point for printing a whole tree
+fn printNode(root: *const Node) void {
+    var guides = std.mem.zeroes(Guides);
+    printNodeLabel(root);
+    printChildren(root, &guides, 0);
 }
 
 fn eval(n: *const Node) !i64 {
@@ -286,7 +321,7 @@ fn eval(n: *const Node) !i64 {
         .neg => |b| {
             const c: i64 = try eval(b.child);
             return -1 * c;
-        }
+        },
     }
 }
 
@@ -317,7 +352,7 @@ pub fn main() !void {
             expr_set = true;
         }
     }
-    
+
     if (!expr_set) {
         std.debug.print("usage: calc [--tokens] [--ast] <expr>\n", .{});
         return;
@@ -340,13 +375,12 @@ pub fn main() !void {
 
     var p = Parser{ .tokens = toks.items, .alloc = ast_alloc };
     const ast = try p.parse();
-    
+
     if (show_ast) {
-        printNode(ast, 0);
+        printNode(ast);
     }
 
     const result: i64 = try eval(ast);
-    
-    std.debug.print("{d}\n", .{ result });
-}
 
+    std.debug.print("{d}\n", .{result});
+}
