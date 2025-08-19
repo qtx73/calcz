@@ -13,9 +13,14 @@ const TokenKind = enum {
     eof,
 };
 
+const Value = union(enum) {
+    integer: i64,
+    float: f64,
+};
+
 const Token = struct {
     kind: TokenKind,
-    value: i64 = 0,
+    value: Value = .{ .integer = 0 },
 };
 
 fn isDigit(c: u8) bool {
@@ -87,12 +92,27 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
             continue;
         }
 
-        if (isDigit(c)) {
+        if (isDigit(c) or c == '.') {
             const start = i;
-            while (i < input.len and isDigit(input[i])) : (i += 1) {}
+            var has_dot = false;
+            while (i < input.len) {
+                if (input[i] == '.') {
+                    if (has_dot) break; // a second dot is not allowed
+                    has_dot = true;
+                    i += 1;
+                    continue;
+                }
+                if (!isDigit(input[i])) break;
+                i += 1;
+            }
             const slice = input[start..i];
-            const val = try std.fmt.parseInt(i64, slice, 10);
-            try tokens.append(.{ .kind = .number, .value = val });
+            if (has_dot) {
+                const val = try std.fmt.parseFloat(f64, slice);
+                try tokens.append(.{ .kind = .number, .value = .{ .float = val } });
+            } else {
+                const val = try std.fmt.parseInt(i64, slice, 10);
+                try tokens.append(.{ .kind = .number, .value = .{ .integer = val } });
+            }
             continue;
         }
 
@@ -104,7 +124,7 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
 }
 
 const Node = union(enum) {
-    number: i64,
+    number: Value,
     add: struct { left: *const Node, right: *const Node },
     sub: struct { left: *const Node, right: *const Node },
     mul: struct { left: *const Node, right: *const Node },
@@ -124,7 +144,7 @@ const ParseError = error{
     InvalidUnaryKind,
 } || std.mem.Allocator.Error;
 
-fn newNumber(alloc: std.mem.Allocator, v: i64) ParseError!*Node {
+fn newNumber(alloc: std.mem.Allocator, v: Value) ParseError!*Node {
     const n = try alloc.create(Node);
     n.* = .{ .number = v };
     return n;
@@ -287,7 +307,10 @@ const Guides = [MAX_DEPTH]bool;
 // Prints the textual label for a node.
 fn printNodeLabel(n: *const Node) void {
     switch (n.*) {
-        .number => |v| std.debug.print("number({d})\n", .{v}),
+        .number => |v| switch (v) {
+            .integer => |i| std.debug.print("number({d})\n", .{i}),
+            .float => |f| std.debug.print("number({d})\n", .{f}),
+        },
         .add => std.debug.print("add\n", .{}),
         .sub => std.debug.print("sub\n", .{}),
         .mul => std.debug.print("mul\n", .{}),
@@ -359,70 +382,131 @@ const EvalError = error{
     DivisionByZero,
     NegativeExponent,
     Overflow,
+    FloatModulo,
 };
 
-// Helper function for integer power calculation
-fn intPow(base: i64, exp: i64) !i64 {
-    if (exp < 0) return error.NegativeExponent;
-    if (exp == 0) return 1;
-
-    var result: i64 = 1;
-    var b = base;
-    var e = exp;
-
-    while (e > 0) {
-        if (@rem(e, 2) == 1) {
-            result = std.math.mul(i64, result, b) catch return error.Overflow;
-        }
-        b = std.math.mul(i64, b, b) catch return error.Overflow;
-        e = @divTrunc(e, 2);
-    }
-
-    return result;
-}
-
-fn eval(n: *const Node) EvalError!i64 {
+fn eval(n: *const Node) EvalError!Value {
     switch (n.*) {
         .number => |v| return v,
         .add => |b| {
-            const l: i64 = try eval(b.left);
-            const r: i64 = try eval(b.right);
-            return std.math.add(i64, l, r) catch return error.Overflow;
+            const l = try eval(b.left);
+            const r = try eval(b.right);
+            switch (l) {
+                .integer => |li| switch (r) {
+                    .integer => |ri| {
+                        const res = std.math.add(i64, li, ri) catch return error.Overflow;
+                        return Value{ .integer = res };
+                    },
+                    .float => |rf| {
+                        return Value{ .float = @as(f64, @floatFromInt(li)) + rf };
+                    },
+                },
+                .float => |lf| switch (r) {
+                    .integer => |ri| {
+                        return Value{ .float = lf + @as(f64, @floatFromInt(ri)) };
+                    },
+                    .float => |rf| {
+                        return Value{ .float = lf + rf };
+                    },
+                },
+            }
         },
         .sub => |b| {
-            const l: i64 = try eval(b.left);
-            const r: i64 = try eval(b.right);
-            return std.math.sub(i64, l, r) catch return error.Overflow;
+            const l = try eval(b.left);
+            const r = try eval(b.right);
+            switch (l) {
+                .integer => |li| switch (r) {
+                    .integer => |ri| {
+                        const res = std.math.sub(i64, li, ri) catch return error.Overflow;
+                        return Value{ .integer = res };
+                    },
+                    .float => |rf| {
+                        return Value{ .float = @as(f64, @floatFromInt(li)) - rf };
+                    },
+                },
+                .float => |lf| switch (r) {
+                    .integer => |ri| {
+                        return Value{ .float = lf - @as(f64, @floatFromInt(ri)) };
+                    },
+                    .float => |rf| {
+                        return Value{ .float = lf - rf };
+                    },
+                },
+            }
         },
         .mul => |b| {
-            const l: i64 = try eval(b.left);
-            const r: i64 = try eval(b.right);
-            return std.math.mul(i64, l, r) catch return error.Overflow;
+            const l = try eval(b.left);
+            const r = try eval(b.right);
+            switch (l) {
+                .integer => |li| switch (r) {
+                    .integer => |ri| {
+                        const res = std.math.mul(i64, li, ri) catch return error.Overflow;
+                        return Value{ .integer = res };
+                    },
+                    .float => |rf| {
+                        return Value{ .float = @as(f64, @floatFromInt(li)) * rf };
+                    },
+                },
+                .float => |lf| switch (r) {
+                    .integer => |ri| {
+                        return Value{ .float = lf * @as(f64, @floatFromInt(ri)) };
+                    },
+                    .float => |rf| {
+                        return Value{ .float = lf * rf };
+                    },
+                },
+            }
         },
         .div => |b| {
-            const l: i64 = try eval(b.left);
-            const r: i64 = try eval(b.right);
-            if (r == 0) return error.DivisionByZero;
-            return @divTrunc(l, r);
+            const l = try eval(b.left);
+            const r = try eval(b.right);
+            const lf = switch (l) {
+                .integer => |li| @as(f64, @floatFromInt(li)),
+                .float => |f| f,
+            };
+            const rf = switch (r) {
+                .integer => |ri| @as(f64, @floatFromInt(ri)),
+                .float => |f| f,
+            };
+            if (rf == 0) return error.DivisionByZero;
+            return Value{ .float = lf / rf };
         },
         .mod => |b| {
-            const l: i64 = try eval(b.left);
-            const r: i64 = try eval(b.right);
-            if (r == 0) return error.DivisionByZero;
-            return @rem(l, r);
+            const l = try eval(b.left);
+            const r = try eval(b.right);
+            switch (l) {
+                .integer => |li| switch (r) {
+                    .integer => |ri| {
+                        if (ri == 0) return error.DivisionByZero;
+                        return Value{ .integer = @rem(li, ri) };
+                    },
+                    .float => return error.FloatModulo,
+                },
+                .float => return error.FloatModulo,
+            }
         },
         .pow => |b| {
-            const l: i64 = try eval(b.left);
-            const r: i64 = try eval(b.right);
-            return try intPow(l, r);
+            const l = try eval(b.left);
+            const r = try eval(b.right);
+            const lf = switch (l) {
+                .integer => |li| @as(f64, @floatFromInt(li)),
+                .float => |f| f,
+            };
+            const rf = switch (r) {
+                .integer => |ri| @as(f64, @floatFromInt(ri)),
+                .float => |f| f,
+            };
+            return Value{ .float = std.math.pow(f64, lf, rf) };
         },
         .pos => |b| {
-            const c: i64 = try eval(b.child);
-            return c;
+            return try eval(b.child);
         },
         .neg => |b| {
-            const c: i64 = try eval(b.child);
-            return std.math.mul(i64, -1, c) catch return error.Overflow;
+            const c = try eval(b.child);
+            return switch (c) {
+                .integer => |i| Value{ .integer = -i },
+                .float => |f| Value{ .float = -f },
+            };
         },
     }
 }
@@ -465,7 +549,10 @@ pub fn main() !void {
 
     if (show_tokens) {
         for (toks.items) |t| switch (t.kind) {
-            .number => std.debug.print("number({d})\n", .{t.value}),
+            .number => switch (t.value) {
+                .integer => |i| std.debug.print("number({d})\n", .{i}),
+                .float => |f| std.debug.print("number({d})\n", .{f}),
+            },
             .add => std.debug.print("add\n", .{}),
             .sub => std.debug.print("sub\n", .{}),
             .mul => std.debug.print("mul\n", .{}),
@@ -485,9 +572,12 @@ pub fn main() !void {
         printNode(ast);
     }
 
-    const result: i64 = try eval(ast);
+    const result = try eval(ast);
 
     // Output final result to stdout
     const stdout = std.io.getStdOut().writer();
-    try stdout.print("{d}\n", .{result});
+    switch (result) {
+        .integer => |i| try stdout.print("{d}\n", .{i}),
+        .float => |f| try stdout.print("{d}\n", .{f}),
+    }
 }
