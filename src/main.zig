@@ -382,5 +382,7 @@ pub fn main() !void {
 
     const result: i64 = try eval(ast);
 
-    std.debug.print("{d}\n", .{result});
+    // Output final result to stdout
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print("{d}\n", .{result});
 }
