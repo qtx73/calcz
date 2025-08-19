@@ -5,6 +5,9 @@ const TokenKind = enum {
     add,
     sub,
     mul,
+    div,
+    mod,
+    pow,
     lparen,
     rparen,
     eof,
@@ -54,6 +57,24 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
             continue;
         }
 
+        if (c == '/') {
+            try tokens.append(.{ .kind = .div });
+            i += 1;
+            continue;
+        }
+
+        if (c == '%') {
+            try tokens.append(.{ .kind = .mod });
+            i += 1;
+            continue;
+        }
+
+        if (c == '^') {
+            try tokens.append(.{ .kind = .pow });
+            i += 1;
+            continue;
+        }
+
         if (c == '(') {
             try tokens.append(.{ .kind = .lparen });
             i += 1;
@@ -87,6 +108,9 @@ const Node = union(enum) {
     add: struct { left: *const Node, right: *const Node },
     sub: struct { left: *const Node, right: *const Node },
     mul: struct { left: *const Node, right: *const Node },
+    div: struct { left: *const Node, right: *const Node },
+    mod: struct { left: *const Node, right: *const Node },
+    pow: struct { left: *const Node, right: *const Node },
     pos: struct { child: *const Node },
     neg: struct { child: *const Node },
 };
@@ -108,7 +132,7 @@ fn newNumber(alloc: std.mem.Allocator, v: i64) ParseError!*Node {
 
 fn newBinary(alloc: std.mem.Allocator, kind: NodeKind, l: *Node, r: *Node) ParseError!*Node {
     switch (kind) {
-        .add, .sub, .mul => {},
+        .add, .sub, .mul, .div, .mod, .pow => {},
         else => return error.InvalidBinaryKind,
     }
     const n = try alloc.create(Node);
@@ -116,6 +140,9 @@ fn newBinary(alloc: std.mem.Allocator, kind: NodeKind, l: *Node, r: *Node) Parse
         .add => .{ .add = .{ .left = l, .right = r } },
         .sub => .{ .sub = .{ .left = l, .right = r } },
         .mul => .{ .mul = .{ .left = l, .right = r } },
+        .div => .{ .div = .{ .left = l, .right = r } },
+        .mod => .{ .mod = .{ .left = l, .right = r } },
+        .pow => .{ .pow = .{ .left = l, .right = r } },
         else => return error.InvalidBinaryKind,
     };
     return n;
@@ -154,23 +181,24 @@ const Parser = struct {
         return node;
     }
 
-    // Expr := Addsub
-    // Addsub := Mul { ('+ | '-') Mul }
-    // Mul := Unary { '*' Unary }
-    // Unary := ('+'|'-' Unary) | Primary
-    // Primary :=  number | '(' Expr ')'
+    // Expr := AddSub
+    // AddSub := MulDiv { ('+' | '-') MulDiv }
+    // MulDiv := Power { ('*' | '/' | '%') Power }
+    // Power := Unary { '^' Unary }
+    // Unary := ('+' | '-') Unary | Primary
+    // Primary := number | '(' Expr ')'
     fn parseAddSub(self: *Parser) ParseError!*Node {
-        var left = try self.parseMul();
+        var left = try self.parseMulDiv();
         while (true) {
             switch (self.peek().kind) {
                 .add => {
                     self.advance();
-                    const right = try self.parseMul();
+                    const right = try self.parseMulDiv();
                     left = try newBinary(self.alloc, .add, left, right);
                 },
                 .sub => {
                     self.advance();
-                    const right = try self.parseMul();
+                    const right = try self.parseMulDiv();
                     left = try newBinary(self.alloc, .sub, left, right);
                 },
                 else => break,
@@ -179,12 +207,37 @@ const Parser = struct {
         return left;
     }
 
-    fn parseMul(self: *Parser) ParseError!*Node {
+    fn parseMulDiv(self: *Parser) ParseError!*Node {
+        var left = try self.parsePower();
+        while (true) {
+            switch (self.peek().kind) {
+                .mul => {
+                    self.advance();
+                    const right = try self.parsePower();
+                    left = try newBinary(self.alloc, .mul, left, right);
+                },
+                .div => {
+                    self.advance();
+                    const right = try self.parsePower();
+                    left = try newBinary(self.alloc, .div, left, right);
+                },
+                .mod => {
+                    self.advance();
+                    const right = try self.parsePower();
+                    left = try newBinary(self.alloc, .mod, left, right);
+                },
+                else => break,
+            }
+        }
+        return left;
+    }
+
+    fn parsePower(self: *Parser) ParseError!*Node {
         var left = try self.parseUnary();
-        while (self.peek().kind == .mul) {
+        if (self.peek().kind == .pow) {
             self.advance();
             const right = try self.parseUnary();
-            left = try newBinary(self.alloc, .mul, left, right);
+            left = try newBinary(self.alloc, .pow, left, right);
         }
         return left;
     }
@@ -238,6 +291,9 @@ fn printNodeLabel(n: *const Node) void {
         .add => std.debug.print("add\n", .{}),
         .sub => std.debug.print("sub\n", .{}),
         .mul => std.debug.print("mul\n", .{}),
+        .div => std.debug.print("div\n", .{}),
+        .mod => std.debug.print("mod\n", .{}),
+        .pow => std.debug.print("pow\n", .{}),
         .pos => std.debug.print("pos\n", .{}),
         .neg => std.debug.print("neg\n", .{}),
     }
@@ -264,6 +320,9 @@ fn printChildren(n: *const Node, guides: *Guides, depth: usize) void {
         .add => |b| &[_]*const Node{ b.left, b.right },
         .sub => |b| &[_]*const Node{ b.left, b.right },
         .mul => |b| &[_]*const Node{ b.left, b.right },
+        .div => |b| &[_]*const Node{ b.left, b.right },
+        .mod => |b| &[_]*const Node{ b.left, b.right },
+        .pow => |b| &[_]*const Node{ b.left, b.right },
         .pos => |b| &[_]*const Node{b.child},
         .neg => |b| &[_]*const Node{b.child},
     };
@@ -296,23 +355,66 @@ fn printNode(root: *const Node) void {
     printChildren(root, &guides, 0);
 }
 
-fn eval(n: *const Node) !i64 {
+const EvalError = error{
+    DivisionByZero,
+    NegativeExponent,
+    Overflow,
+};
+
+// Helper function for integer power calculation
+fn intPow(base: i64, exp: i64) !i64 {
+    if (exp < 0) return error.NegativeExponent;
+    if (exp == 0) return 1;
+
+    var result: i64 = 1;
+    var b = base;
+    var e = exp;
+
+    while (e > 0) {
+        if (@rem(e, 2) == 1) {
+            result = std.math.mul(i64, result, b) catch return error.Overflow;
+        }
+        b = std.math.mul(i64, b, b) catch return error.Overflow;
+        e = @divTrunc(e, 2);
+    }
+
+    return result;
+}
+
+fn eval(n: *const Node) EvalError!i64 {
     switch (n.*) {
         .number => |v| return v,
         .add => |b| {
             const l: i64 = try eval(b.left);
             const r: i64 = try eval(b.right);
-            return l + r;
+            return std.math.add(i64, l, r) catch return error.Overflow;
         },
         .sub => |b| {
             const l: i64 = try eval(b.left);
             const r: i64 = try eval(b.right);
-            return l - r;
+            return std.math.sub(i64, l, r) catch return error.Overflow;
         },
         .mul => |b| {
             const l: i64 = try eval(b.left);
             const r: i64 = try eval(b.right);
-            return l * r;
+            return std.math.mul(i64, l, r) catch return error.Overflow;
+        },
+        .div => |b| {
+            const l: i64 = try eval(b.left);
+            const r: i64 = try eval(b.right);
+            if (r == 0) return error.DivisionByZero;
+            return @divTrunc(l, r);
+        },
+        .mod => |b| {
+            const l: i64 = try eval(b.left);
+            const r: i64 = try eval(b.right);
+            if (r == 0) return error.DivisionByZero;
+            return @rem(l, r);
+        },
+        .pow => |b| {
+            const l: i64 = try eval(b.left);
+            const r: i64 = try eval(b.right);
+            return try intPow(l, r);
         },
         .pos => |b| {
             const c: i64 = try eval(b.child);
@@ -320,7 +422,7 @@ fn eval(n: *const Node) !i64 {
         },
         .neg => |b| {
             const c: i64 = try eval(b.child);
-            return -1 * c;
+            return std.math.mul(i64, -1, c) catch return error.Overflow;
         },
     }
 }
@@ -367,6 +469,9 @@ pub fn main() !void {
             .add => std.debug.print("add\n", .{}),
             .sub => std.debug.print("sub\n", .{}),
             .mul => std.debug.print("mul\n", .{}),
+            .div => std.debug.print("div\n", .{}),
+            .mod => std.debug.print("mod\n", .{}),
+            .pow => std.debug.print("pow\n", .{}),
             .lparen => std.debug.print("(\n", .{}),
             .rparen => std.debug.print(")\n", .{}),
             .eof => std.debug.print("eof\n", .{}),
