@@ -201,11 +201,12 @@ const Parser = struct {
         return node;
     }
 
-    // Expr := AddSub
-    // AddSub := MulDiv { ('+' | '-') MulDiv }
-    // MulDiv := Power { ('*' | '/' | '%') Power }
-    // Power := Unary { '^' Unary }
-    // Unary := ('+' | '-') Unary | Primary
+    // Grammar
+    // Expr    := AddSub
+    // AddSub  := MulDiv { ('+' | '-') MulDiv }
+    // MulDiv  := Prefix { ('*' | '/' | '%') Prefix }
+    // Prefix  := { ('+' | '-') } Power        // Multiple signs allowed, weaker than Power
+    // Power   := Primary { '^' Power }?       // Right associative
     // Primary := number | '(' Expr ')'
     fn parseAddSub(self: *Parser) ParseError!*Node {
         var left = try self.parseMulDiv();
@@ -228,22 +229,22 @@ const Parser = struct {
     }
 
     fn parseMulDiv(self: *Parser) ParseError!*Node {
-        var left = try self.parsePower();
+        var left = try self.parsePrefix();
         while (true) {
             switch (self.peek().kind) {
                 .mul => {
                     self.advance();
-                    const right = try self.parsePower();
+                    const right = try self.parsePrefix();
                     left = try newBinary(self.alloc, .mul, left, right);
                 },
                 .div => {
                     self.advance();
-                    const right = try self.parsePower();
+                    const right = try self.parsePrefix();
                     left = try newBinary(self.alloc, .div, left, right);
                 },
                 .mod => {
                     self.advance();
-                    const right = try self.parsePower();
+                    const right = try self.parsePrefix();
                     left = try newBinary(self.alloc, .mod, left, right);
                 },
                 else => break,
@@ -252,31 +253,30 @@ const Parser = struct {
         return left;
     }
 
-    fn parsePower(self: *Parser) ParseError!*Node {
-        var left = try self.parseUnary();
-        if (self.peek().kind == .pow) {
-            self.advance();
-            const right = try self.parseUnary();
-            left = try newBinary(self.alloc, .pow, left, right);
-        }
-        return left;
-    }
-
-    fn parseUnary(self: *Parser) ParseError!*Node {
-        const t = self.peek();
-        switch (t.kind) {
+    fn parsePrefix(self: *Parser) ParseError!*Node {
+        switch (self.peek().kind) {
             .add => {
                 self.advance();
-                const child = try self.parseUnary();
+                const child = try self.parsePrefix();
                 return try newUnary(self.alloc, .pos, child);
             },
             .sub => {
                 self.advance();
-                const child = try self.parseUnary();
+                const child = try self.parsePrefix();
                 return try newUnary(self.alloc, .neg, child);
             },
-            else => return self.parsePrimary(),
+            else => return self.parsePower(),
         }
+    }
+
+    fn parsePower(self: *Parser) ParseError!*Node {
+        var left = try self.parsePrimary();
+        if (self.peek().kind == .pow) {
+            self.advance();
+            const right = try self.parsePower(); // Right associative: recurse into parsePower
+            left = try newBinary(self.alloc, .pow, left, right);
+        }
+        return left;
     }
 
     fn parsePrimary(self: *Parser) ParseError!*Node {
