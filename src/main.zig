@@ -198,6 +198,41 @@ fn tokenKindToStr(kind: TokenKind) []const u8 {
     };
 }
 
+fn handleParseError(parser: *const Parser, err: ParseError) void {
+    switch (err) {
+        error.ExpectedPrimary => {
+            var buf: [96]u8 = undefined;
+            const msg = std.fmt.bufPrint(
+                &buf,
+                "expected number or '(' but got {s}",
+                .{tokenKindToStr(parser.last_got)},
+            ) catch "expected primary";
+            printDiagAt(parser.input, parser.error_pos, msg);
+        },
+        error.ExpectedRParen => {
+            printDiagAt(parser.input, parser.error_pos, "expected ')'");
+        },
+        error.TrailingInput => {
+            var buf: [96]u8 = undefined;
+            const msg = std.fmt.bufPrint(
+                &buf,
+                "unexpected token after expression: {s}",
+                .{tokenKindToStr(parser.last_got)},
+            ) catch "trailing input";
+            printDiagAt(parser.input, parser.error_pos, msg);
+        },
+        error.InvalidBinaryKind => {
+            printDiagAt(parser.input, parser.error_pos, "internal parser error: invalid binary operator");
+        },
+        error.InvalidUnaryKind => {
+            printDiagAt(parser.input, parser.error_pos, "internal parser error: invalid unary operator");
+        },
+        else => {
+            std.debug.print("parse error: {s}\n", .{@errorName(err)});
+        },
+    }
+}
+
 fn newNumber(alloc: std.mem.Allocator, v: Value) ParseError!*Node {
     const n = try alloc.create(Node);
     n.* = .{ .number = v };
@@ -651,38 +686,7 @@ pub fn main() !void {
 
     var p = Parser{ .tokens = toks.items, .alloc = ast_alloc, .input = expr };
     const ast = p.parse() catch |e| {
-        switch (e) {
-            error.ExpectedPrimary => {
-                var buf: [96]u8 = undefined;
-                const msg = std.fmt.bufPrint(
-                    &buf,
-                    "expected number or '(' but got {s}",
-                    .{tokenKindToStr(p.last_got)},
-                ) catch "expected primary";
-                printDiagAt(p.input, p.error_pos, msg);
-            },
-            error.ExpectedRParen => {
-                printDiagAt(p.input, p.error_pos, "expected ')'");
-            },
-            error.TrailingInput => {
-                var buf: [96]u8 = undefined;
-                const msg = std.fmt.bufPrint(
-                    &buf,
-                    "unexpected token after expression: {s}",
-                    .{tokenKindToStr(p.last_got)},
-                ) catch "trailing input";
-                printDiagAt(p.input, p.error_pos, msg);
-            },
-            error.InvalidBinaryKind => {
-                printDiagAt(p.input, p.error_pos, "internal parser error: invalid binary operator");
-            },
-            error.InvalidUnaryKind => {
-                printDiagAt(p.input, p.error_pos, "internal parser error: invalid unary operator");
-            },
-            else => {
-                std.debug.print("parse error: {s}\n", .{@errorName(e)});
-            },
-        }
+        handleParseError(&p, e);
         return;
     };
 
