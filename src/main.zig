@@ -21,6 +21,9 @@ const Value = union(enum) {
 const Token = struct {
     kind: TokenKind,
     value: Value = .{ .integer = 0 },
+    // Position information: byte offsets in input [start, end)
+    start: usize = 0,
+    end: usize = 0,
 };
 
 fn isDigit(c: u8) bool {
@@ -46,49 +49,49 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
         }
 
         if (c == '+') {
-            try tokens.append(.{ .kind = .add });
+            try tokens.append(.{ .kind = .add, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == '-') {
-            try tokens.append(.{ .kind = .sub });
+            try tokens.append(.{ .kind = .sub, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == '*') {
-            try tokens.append(.{ .kind = .mul });
+            try tokens.append(.{ .kind = .mul, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == '/') {
-            try tokens.append(.{ .kind = .div });
+            try tokens.append(.{ .kind = .div, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == '%') {
-            try tokens.append(.{ .kind = .mod });
+            try tokens.append(.{ .kind = .mod, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == '^') {
-            try tokens.append(.{ .kind = .pow });
+            try tokens.append(.{ .kind = .pow, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == '(') {
-            try tokens.append(.{ .kind = .lparen });
+            try tokens.append(.{ .kind = .lparen, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
 
         if (c == ')') {
-            try tokens.append(.{ .kind = .rparen });
+            try tokens.append(.{ .kind = .rparen, .start = i, .end = i + 1 });
             i += 1;
             continue;
         }
@@ -109,10 +112,10 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
             const slice = input[start..i];
             if (has_dot) {
                 const val = try std.fmt.parseFloat(f64, slice);
-                try tokens.append(.{ .kind = .number, .value = .{ .float = val } });
+                try tokens.append(.{ .kind = .number, .value = .{ .float = val }, .start = start, .end = i });
             } else {
                 const val = try std.fmt.parseInt(i64, slice, 10);
-                try tokens.append(.{ .kind = .number, .value = .{ .integer = val } });
+                try tokens.append(.{ .kind = .number, .value = .{ .integer = val }, .start = start, .end = i });
             }
             continue;
         }
@@ -120,7 +123,7 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
         return error.InvalidCharacter;
     }
 
-    try tokens.append(.{ .kind = .eof });
+    try tokens.append(.{ .kind = .eof, .start = input.len, .end = input.len });
     return tokens;
 }
 
@@ -144,6 +147,56 @@ const ParseError = error{
     InvalidBinaryKind,
     InvalidUnaryKind,
 } || std.mem.Allocator.Error;
+
+fn computeLineCol(input: []const u8, pos: usize) struct {
+    line: usize,
+    col: usize,
+    line_start: usize,
+    line_end: usize,
+} {
+    const p = if (pos <= input.len) pos else input.len;
+    var line_no: usize = 1;
+    var i: usize = 0;
+    while (i < p) : (i += 1) {
+        if (input[i] == '\n') line_no += 1;
+    }
+    var line_start = p;
+    while (line_start > 0 and input[line_start - 1] != '\n') line_start -= 1;
+
+    var line_end = p;
+    while (line_end < input.len and input[line_end] != '\n') line_end += 1;
+
+    const col = (p - line_start) + 1;
+    return .{ .line = line_no, .col = col, .line_start = line_start, .line_end = line_end };
+}
+
+fn printDiagAt(input: []const u8, pos: usize, what: []const u8) void {
+    const info = computeLineCol(input, pos);
+    const line_slice = input[info.line_start..info.line_end];
+
+    std.debug.print("error: {s}\n", .{what});
+    std.debug.print(" --> {d}:{d}\n", .{ info.line, info.col });
+    std.debug.print("{d} | {s}\n", .{ info.line, line_slice });
+    std.debug.print("  | ", .{});
+    var k: usize = 1;
+    while (k < info.col) : (k += 1) std.debug.print(" ", .{});
+    std.debug.print("^\n", .{});
+}
+
+fn tokenKindToStr(kind: TokenKind) []const u8 {
+    return switch (kind) {
+        .number => "number",
+        .add => "'+'",
+        .sub => "'-'",
+        .mul => "'*'",
+        .div => "'/'",
+        .mod => "'%'",
+        .pow => "'^'",
+        .lparen => "'('",
+        .rparen => "')'",
+        .eof => "end of input",
+    };
+}
 
 fn newNumber(alloc: std.mem.Allocator, v: Value) ParseError!*Node {
     const n = try alloc.create(Node);
@@ -187,6 +240,10 @@ const Parser = struct {
     tokens: []const Token,
     pos: usize = 0,
     alloc: std.mem.Allocator,
+    // for error reporting
+    input: []const u8,
+    error_pos: usize = 0,
+    last_got: TokenKind = .eof,
 
     fn peek(self: *Parser) Token {
         return self.tokens[self.pos];
@@ -197,8 +254,12 @@ const Parser = struct {
 
     pub fn parse(self: *Parser) ParseError!*Node {
         const node = try self.parseAddSub();
-        if (self.peek().kind != .eof)
+        const t = self.peek();
+        if (t.kind != .eof) {
+            self.last_got = t.kind;
+            self.error_pos = t.start;
             return error.TrailingInput;
+        }
         return node;
     }
 
@@ -290,12 +351,20 @@ const Parser = struct {
             .lparen => {
                 self.advance();
                 const node = try self.parseAddSub();
-                if (self.peek().kind != .rparen)
+                const rparen_tok = self.peek();
+                if (rparen_tok.kind != .rparen) {
+                    self.last_got = rparen_tok.kind;
+                    self.error_pos = rparen_tok.start;
                     return error.ExpectedRParen;
+                }
                 self.advance();
                 return node;
             },
-            else => return error.ExpectedPrimary,
+            else => {
+                self.last_got = t.kind;
+                self.error_pos = t.start;
+                return error.ExpectedPrimary;
+            },
         }
     }
 };
@@ -580,8 +649,42 @@ pub fn main() !void {
         };
     }
 
-    var p = Parser{ .tokens = toks.items, .alloc = ast_alloc };
-    const ast = try p.parse();
+    var p = Parser{ .tokens = toks.items, .alloc = ast_alloc, .input = expr };
+    const ast = p.parse() catch |e| {
+        switch (e) {
+            error.ExpectedPrimary => {
+                var buf: [96]u8 = undefined;
+                const msg = std.fmt.bufPrint(
+                    &buf,
+                    "expected number or '(' but got {s}",
+                    .{tokenKindToStr(p.last_got)},
+                ) catch "expected primary";
+                printDiagAt(p.input, p.error_pos, msg);
+            },
+            error.ExpectedRParen => {
+                printDiagAt(p.input, p.error_pos, "expected ')'");
+            },
+            error.TrailingInput => {
+                var buf: [96]u8 = undefined;
+                const msg = std.fmt.bufPrint(
+                    &buf,
+                    "unexpected token after expression: {s}",
+                    .{tokenKindToStr(p.last_got)},
+                ) catch "trailing input";
+                printDiagAt(p.input, p.error_pos, msg);
+            },
+            error.InvalidBinaryKind => {
+                printDiagAt(p.input, p.error_pos, "internal parser error: invalid binary operator");
+            },
+            error.InvalidUnaryKind => {
+                printDiagAt(p.input, p.error_pos, "internal parser error: invalid unary operator");
+            },
+            else => {
+                std.debug.print("parse error: {s}\n", .{@errorName(e)});
+            },
+        }
+        return;
+    };
 
     if (show_ast) {
         printNode(ast);
