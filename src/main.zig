@@ -28,7 +28,8 @@ fn isDigit(c: u8) bool {
 }
 
 fn isSpace(c: u8) bool {
-    return c == ' ' or c == '\t';
+    // Allow all whitespace characters (space, tab, newline, CR, VT, etc.)
+    return std.ascii.isWhitespace(c);
 }
 
 fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Token) {
@@ -528,6 +529,10 @@ pub fn main() !void {
     var expr: []const u8 = undefined;
     var expr_set = false;
 
+    // stdin buffer to hold input read from stdin (lifetime management)
+    var stdin_buf: ?[]u8 = null;
+    defer if (stdin_buf) |buf| galloc.free(buf);
+
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--tokens")) {
             show_tokens = true;
@@ -540,8 +545,18 @@ pub fn main() !void {
     }
 
     if (!expr_set) {
-        std.debug.print("usage: calc [--tokens] [--ast] <expr>\n", .{});
-        return;
+        // If no arguments provided, read from stdin with 1MiB limit
+        const MAX_STDIN: usize = 1 << 20;
+        const stdin = std.io.getStdIn();
+        const raw = try stdin.readToEndAlloc(galloc, MAX_STDIN);
+        stdin_buf = raw; // Keep buffer alive until main() ends
+        // Trim leading/trailing whitespace (including newlines)
+        expr = std.mem.trim(u8, raw, " \t\r\n");
+        if (expr.len == 0) {
+            std.debug.print("usage: calc [--tokens] [--ast] <expr>\n", .{});
+            return;
+        }
+        expr_set = true;
     }
 
     var toks = try tokenize(galloc, expr);
