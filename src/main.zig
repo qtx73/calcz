@@ -13,7 +13,7 @@ const TokenKind = enum {
     eof,
 };
 
-const Value = union(enum) {
+pub const Value = union(enum) {
     integer: i64,
     float: f64,
 };
@@ -483,12 +483,57 @@ fn printNode(root: *const Node) void {
     printChildren(root, &guides, 0);
 }
 
-const EvalError = error{
+pub const EvalError = error{
     DivisionByZero,
     NegativeExponent,
     Overflow,
     FloatModulo,
 };
+
+// Debug options for the calculate function
+pub const DebugOptions = struct {
+    show_tokens: bool = false,
+    show_ast: bool = false,
+};
+
+// High-level public API for calculating mathematical expressions
+pub fn calculate(allocator: std.mem.Allocator, expression: []const u8, debug_options: DebugOptions) !Value {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const ast_alloc = arena.allocator();
+
+    var tokens = try tokenize(allocator, expression);
+    defer tokens.deinit();
+
+    // Debug: show tokens if requested
+    if (debug_options.show_tokens) {
+        for (tokens.items) |t| switch (t.kind) {
+            .number => switch (t.value) {
+                .integer => |i| std.debug.print("number({d})\n", .{i}),
+                .float => |f| std.debug.print("number({d})\n", .{f}),
+            },
+            .add => std.debug.print("add\n", .{}),
+            .sub => std.debug.print("sub\n", .{}),
+            .mul => std.debug.print("mul\n", .{}),
+            .div => std.debug.print("div\n", .{}),
+            .mod => std.debug.print("mod\n", .{}),
+            .pow => std.debug.print("pow\n", .{}),
+            .lparen => std.debug.print("(\n", .{}),
+            .rparen => std.debug.print(")\n", .{}),
+            .eof => std.debug.print("eof\n", .{}),
+        };
+    }
+
+    var parser = Parser{ .tokens = tokens.items, .alloc = ast_alloc, .input = expression };
+    const ast = try parser.parse();
+
+    // Debug: show AST if requested
+    if (debug_options.show_ast) {
+        printNode(ast);
+    }
+
+    return try eval(ast);
+}
 
 fn eval(n: *const Node) EvalError!Value {
     switch (n.*) {
@@ -621,10 +666,6 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const galloc = gpa.allocator();
 
-    var arena = std.heap.ArenaAllocator.init(galloc);
-    defer arena.deinit();
-    const ast_alloc = arena.allocator();
-
     var args = std.process.args();
     _ = args.next(); // exe name
 
@@ -663,38 +704,14 @@ pub fn main() !void {
         expr_set = true;
     }
 
-    var toks = try tokenize(galloc, expr);
-    defer toks.deinit();
-
-    if (show_tokens) {
-        for (toks.items) |t| switch (t.kind) {
-            .number => switch (t.value) {
-                .integer => |i| std.debug.print("number({d})\n", .{i}),
-                .float => |f| std.debug.print("number({d})\n", .{f}),
-            },
-            .add => std.debug.print("add\n", .{}),
-            .sub => std.debug.print("sub\n", .{}),
-            .mul => std.debug.print("mul\n", .{}),
-            .div => std.debug.print("div\n", .{}),
-            .mod => std.debug.print("mod\n", .{}),
-            .pow => std.debug.print("pow\n", .{}),
-            .lparen => std.debug.print("(\n", .{}),
-            .rparen => std.debug.print(")\n", .{}),
-            .eof => std.debug.print("eof\n", .{}),
-        };
-    }
-
-    var p = Parser{ .tokens = toks.items, .alloc = ast_alloc, .input = expr };
-    const ast = p.parse() catch |e| {
-        handleParseError(&p, e);
-        return;
+    // Create debug options based on command line flags
+    const debug_options = DebugOptions{
+        .show_tokens = show_tokens,
+        .show_ast = show_ast,
     };
 
-    if (show_ast) {
-        printNode(ast);
-    }
-
-    const result = try eval(ast);
+    // Calculate the result using the unified API
+    const result = try calculate(galloc, expr, debug_options);
 
     // Output final result to stdout
     const stdout = std.io.getStdOut().writer();
