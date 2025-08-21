@@ -10,6 +10,8 @@ const TokenKind = enum {
     pow,
     lparen,
     rparen,
+    identifier,
+    comma,
     eof,
 };
 
@@ -27,6 +29,7 @@ pub const Value = union(enum) {
 const Token = struct {
     kind: TokenKind,
     value: Value = .{ .integer = 0 },
+    string: ?[]const u8 = null, // For identifiers
     // Position information: byte offsets in input [start, end)
     start: usize = 0,
     end: usize = 0,
@@ -43,6 +46,14 @@ fn isSpace(c: u8) bool {
 
 fn isSign(c: u8) bool {
     return c == '+' or c == '-';
+}
+
+fn isAlpha(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+}
+
+fn isAlphaNum(c: u8) bool {
+    return isAlpha(c) or isDigit(c) or c == '_';
 }
 
 const NumberScanResult = struct {
@@ -171,6 +182,27 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) TokenizeError!std.A
             continue;
         }
 
+        if (c == ',') {
+            try tokens.append(.{ .kind = .comma, .start = i, .end = i + 1 });
+            i += 1;
+            continue;
+        }
+
+        if (isAlpha(c)) {
+            const start = i;
+            while (i < input.len and isAlphaNum(input[i])) {
+                i += 1;
+            }
+            const slice = input[start..i];
+            try tokens.append(.{
+                .kind = .identifier,
+                .string = slice,
+                .start = start,
+                .end = i,
+            });
+            continue;
+        }
+
         if (isDigit(c) or c == '.') {
             const start = i;
             const scan_result = scanNumber(input, i);
@@ -219,6 +251,7 @@ const Node = union(enum) {
     pow: struct { left: *const Node, right: *const Node },
     pos: struct { child: *const Node },
     neg: struct { child: *const Node },
+    function_call: struct { name: []const u8, args: []const *const Node },
 };
 const NodeKind = std.meta.Tag(Node);
 
@@ -276,6 +309,8 @@ fn tokenKindToStr(kind: TokenKind) []const u8 {
         .pow => "'^'",
         .lparen => "'('",
         .rparen => "')'",
+        .identifier => "identifier",
+        .comma => "','",
         .eof => "end of input",
     };
 }
@@ -415,6 +450,20 @@ fn newUnary(alloc: std.mem.Allocator, kind: NodeKind, child: *Node) ParseError!*
     return n;
 }
 
+fn newFunctionCall(alloc: std.mem.Allocator, name: []const u8, args: []const *const Node) ParseError!*Node {
+    const n = try alloc.create(Node);
+    n.* = .{ .function_call = .{ .name = name, .args = args } };
+    return n;
+}
+
+fn isKnownFunction(name: []const u8) bool {
+    const functions = [_][]const u8{ "abs", "sqrt", "pow", "sin", "cos", "tan", "log", "ln" };
+    for (functions) |func| {
+        if (std.mem.eql(u8, name, func)) return true;
+    }
+    return false;
+}
+
 const Parser = struct {
     tokens: []const Token,
     pos: usize = 0,
@@ -539,12 +588,68 @@ const Parser = struct {
                 self.advance();
                 return node;
             },
+            .identifier => {
+                const name = t.string.?;
+                self.advance();
+
+                // Check if this is a function call
+                if (self.peek().kind == .lparen) {
+                    if (!isKnownFunction(name)) {
+                        self.last_got = .identifier;
+                        self.error_pos = t.start;
+                        return error.ExpectedPrimary;
+                    }
+                    return try self.parseFunctionCall(name);
+                } else {
+                    // Unknown identifier (not a function call)
+                    self.last_got = .identifier;
+                    self.error_pos = t.start;
+                    return error.ExpectedPrimary;
+                }
+            },
             else => {
                 self.last_got = t.kind;
                 self.error_pos = t.start;
                 return error.ExpectedPrimary;
             },
         }
+    }
+
+    fn parseFunctionCall(self: *Parser, name: []const u8) ParseError!*Node {
+        // Consume '('
+        self.advance();
+
+        var args = std.ArrayList(*const Node).init(self.alloc);
+        defer args.deinit();
+
+        // Handle empty argument list
+        if (self.peek().kind == .rparen) {
+            self.advance();
+            const args_slice = try args.toOwnedSlice();
+            return try newFunctionCall(self.alloc, name, args_slice);
+        }
+
+        // Parse first argument
+        const first_arg = try self.parseAddSub();
+        try args.append(first_arg);
+
+        // Parse additional arguments (for functions like pow(x,y))
+        while (self.peek().kind == .comma) {
+            self.advance(); // consume comma
+            const arg = try self.parseAddSub();
+            try args.append(arg);
+        }
+
+        // Expect closing parenthesis
+        if (self.peek().kind != .rparen) {
+            self.last_got = self.peek().kind;
+            self.error_pos = self.peek().start;
+            return error.ExpectedRParen;
+        }
+        self.advance();
+
+        const args_slice = try args.toOwnedSlice();
+        return try newFunctionCall(self.alloc, name, args_slice);
     }
 };
 
@@ -568,6 +673,7 @@ fn printNodeLabel(n: *const Node) void {
         .pow => std.debug.print("pow\n", .{}),
         .pos => std.debug.print("pos\n", .{}),
         .neg => std.debug.print("neg\n", .{}),
+        .function_call => |f| std.debug.print("{s}()\n", .{f.name}),
     }
 }
 
@@ -597,6 +703,7 @@ fn printChildren(n: *const Node, guides: *Guides, depth: usize) void {
         .pow => |b| &[_]*const Node{ b.left, b.right },
         .pos => |b| &[_]*const Node{b.child},
         .neg => |b| &[_]*const Node{b.child},
+        .function_call => |f| f.args,
     };
 
     // Iterate with indices to know if a child is the last one.
@@ -632,6 +739,8 @@ pub const EvalError = error{
     NegativeExponent,
     Overflow,
     FloatModulo,
+    InvalidFunctionArgument,
+    WrongArgumentCount,
 };
 
 // Debug options for the calculate function
@@ -667,6 +776,8 @@ pub fn calculate(allocator: std.mem.Allocator, expression: []const u8, debug_opt
             .pow => std.debug.print("pow\n", .{}),
             .lparen => std.debug.print("(\n", .{}),
             .rparen => std.debug.print(")\n", .{}),
+            .identifier => std.debug.print("identifier({s})\n", .{t.string.?}),
+            .comma => std.debug.print(",\n", .{}),
             .eof => std.debug.print("eof\n", .{}),
         };
     }
@@ -808,6 +919,73 @@ fn eval(n: *const Node) EvalError!Value {
                 .float => |f| Value{ .float = -f },
             };
         },
+        .function_call => |f| {
+            return try evalFunction(f.name, f.args);
+        },
+    }
+}
+
+fn evalFunction(name: []const u8, args: []const *const Node) EvalError!Value {
+    // Helper function to convert Value to f64
+    const toFloat = struct {
+        fn call(v: Value) f64 {
+            return switch (v) {
+                .integer => |i| @as(f64, @floatFromInt(i)),
+                .float => |f| f,
+            };
+        }
+    }.call;
+
+    if (std.mem.eql(u8, name, "abs")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        return switch (arg) {
+            .integer => |i| Value{ .integer = if (i < 0) -i else i },
+            .float => |f| Value{ .float = @abs(f) },
+        };
+    } else if (std.mem.eql(u8, name, "sqrt")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        const f = toFloat(arg);
+        if (f < 0) return error.InvalidFunctionArgument;
+        return Value{ .float = std.math.sqrt(f) };
+    } else if (std.mem.eql(u8, name, "pow")) {
+        if (args.len != 2) return error.WrongArgumentCount;
+        const arg1 = try eval(args[0]);
+        const arg2 = try eval(args[1]);
+        const f1 = toFloat(arg1);
+        const f2 = toFloat(arg2);
+        return Value{ .float = std.math.pow(f64, f1, f2) };
+    } else if (std.mem.eql(u8, name, "sin")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        const f = toFloat(arg);
+        return Value{ .float = std.math.sin(f) };
+    } else if (std.mem.eql(u8, name, "cos")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        const f = toFloat(arg);
+        return Value{ .float = std.math.cos(f) };
+    } else if (std.mem.eql(u8, name, "tan")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        const f = toFloat(arg);
+        return Value{ .float = std.math.tan(f) };
+    } else if (std.mem.eql(u8, name, "log")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        const f = toFloat(arg);
+        if (f <= 0) return error.InvalidFunctionArgument;
+        return Value{ .float = std.math.log10(f) };
+    } else if (std.mem.eql(u8, name, "ln")) {
+        if (args.len != 1) return error.WrongArgumentCount;
+        const arg = try eval(args[0]);
+        const f = toFloat(arg);
+        if (f <= 0) return error.InvalidFunctionArgument;
+        return Value{ .float = std.math.log(f64, std.math.e, f) };
+    } else {
+        // This should never happen since we check isKnownFunction in the parser
+        return error.InvalidFunctionArgument;
     }
 }
 
