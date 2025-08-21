@@ -513,7 +513,7 @@ const Parser = struct {
     // MulDiv  := Prefix { ('*' | '/' | '%') Prefix }
     // Prefix  := { ('+' | '-') } Power        // Multiple signs allowed, weaker than Power
     // Power   := Primary { '^' Prefix }?       // Right associative
-    // Primary := number | variable | '(' Expr ')' | FunctionCall
+    // Primary := number | '(' Expr ')' | FunctionCall
     // FunctionCall := FunctionName '(' Expr [',' Expr] ')'
     fn parseAddSub(self: *Parser) ParseError!*Node {
         var left = try self.parseMulDiv();
@@ -949,7 +949,10 @@ fn eval(n: *const Node) EvalError!Value {
         .neg => |b| {
             const c = try eval(b.child);
             return switch (c) {
-                .integer => |i| Value{ .integer = -i },
+                .integer => |i| {
+                    const neg = std.math.negate(i) catch return error.Overflow;
+                    return Value{ .integer = neg };
+                },
                 .float => |f| Value{ .float = -f },
             };
         },
