@@ -447,7 +447,7 @@ const Parser = struct {
     // AddSub  := MulDiv { ('+' | '-') MulDiv }
     // MulDiv  := Prefix { ('*' | '/' | '%') Prefix }
     // Prefix  := { ('+' | '-') } Power        // Multiple signs allowed, weaker than Power
-    // Power   := Primary { '^' Power }?       // Right associative
+    // Power   := Primary { '^' Prefix }?       // Right associative
     // Primary := number | '(' Expr ')'
     fn parseAddSub(self: *Parser) ParseError!*Node {
         var left = try self.parseMulDiv();
@@ -514,7 +514,7 @@ const Parser = struct {
         var left = try self.parsePrimary();
         if (self.peek().kind == .pow) {
             self.advance();
-            const right = try self.parsePower(); // Right associative: recurse into parsePower
+            const right = try self.parsePrefix(); // Right associative: recurse into parsePrefix
             left = try newBinary(self.alloc, .pow, left, right);
         }
         return left;
