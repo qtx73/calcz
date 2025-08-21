@@ -243,6 +243,7 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) TokenizeError!std.A
 
 const Node = union(enum) {
     number: Value,
+    variable: []const u8,
     add: struct { left: *const Node, right: *const Node },
     sub: struct { left: *const Node, right: *const Node },
     mul: struct { left: *const Node, right: *const Node },
@@ -464,6 +465,21 @@ fn isKnownFunction(name: []const u8) bool {
     return false;
 }
 
+fn newVariable(alloc: std.mem.Allocator, name: []const u8) ParseError!*Node {
+    const n = try alloc.create(Node);
+    n.* = .{ .variable = name };
+    return n;
+}
+
+fn isBuiltinConstant(name: []const u8) bool {
+    return std.mem.eql(u8, name, "pi") or std.mem.eql(u8, name, "e");
+}
+
+fn isKnownVariable(name: []const u8) bool {
+    // Currently only support builtin constants, future: check variable table
+    return isBuiltinConstant(name);
+}
+
 const Parser = struct {
     tokens: []const Token,
     pos: usize = 0,
@@ -601,8 +617,11 @@ const Parser = struct {
                         return error.ExpectedPrimary;
                     }
                     return try self.parseFunctionCall(name);
+                } else if (isKnownVariable(name)) {
+                    // Variable (currently constants like pi, e)
+                    return try newVariable(self.alloc, name);
                 } else {
-                    // Unknown identifier (not a function call)
+                    // Unknown identifier
                     self.last_got = .identifier;
                     self.error_pos = t.start;
                     return error.ExpectedPrimary;
@@ -666,6 +685,7 @@ fn printNodeLabel(n: *const Node) void {
             .integer => |i| std.debug.print("number({d})\n", .{i}),
             .float => |f| std.debug.print("number({e})\n", .{f}),
         },
+        .variable => |name| std.debug.print("variable({s})\n", .{name}),
         .add => std.debug.print("add\n", .{}),
         .sub => std.debug.print("sub\n", .{}),
         .mul => std.debug.print("mul\n", .{}),
@@ -696,6 +716,7 @@ fn printChildren(n: *const Node, guides: *Guides, depth: usize) void {
     // Collect this node's children as a slice of pointers.
     const children: []const *const Node = switch (n.*) {
         .number => &[_]*const Node{},
+        .variable => &[_]*const Node{},
         .add => |b| &[_]*const Node{ b.left, b.right },
         .sub => |b| &[_]*const Node{ b.left, b.right },
         .mul => |b| &[_]*const Node{ b.left, b.right },
@@ -742,6 +763,7 @@ pub const EvalError = error{
     FloatModulo,
     InvalidFunctionArgument,
     WrongArgumentCount,
+    UnknownVariable,
 };
 
 // Debug options for the calculate function
@@ -800,6 +822,17 @@ pub fn calculate(allocator: std.mem.Allocator, expression: []const u8, debug_opt
 fn eval(n: *const Node) EvalError!Value {
     switch (n.*) {
         .number => |v| return v,
+        .variable => |name| {
+            // Evaluate builtin constants
+            if (std.mem.eql(u8, name, "pi")) {
+                return Value{ .float = std.math.pi };
+            } else if (std.mem.eql(u8, name, "e")) {
+                return Value{ .float = std.math.e };
+            } else {
+                // Future: check variable table here
+                return error.UnknownVariable;
+            }
+        },
         .add => |b| {
             const l = try eval(b.left);
             const r = try eval(b.right);
