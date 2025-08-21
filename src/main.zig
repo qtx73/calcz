@@ -558,7 +558,7 @@ fn printNodeLabel(n: *const Node) void {
     switch (n.*) {
         .number => |v| switch (v) {
             .integer => |i| std.debug.print("number({d})\n", .{i}),
-            .float => |f| std.debug.print("number({d})\n", .{f}),
+            .float => |f| std.debug.print("number({e})\n", .{f}),
         },
         .add => std.debug.print("add\n", .{}),
         .sub => std.debug.print("sub\n", .{}),
@@ -657,7 +657,7 @@ pub fn calculate(allocator: std.mem.Allocator, expression: []const u8, debug_opt
         for (tokens.items) |t| switch (t.kind) {
             .number => switch (t.value) {
                 .integer => |i| std.debug.print("number({d})\n", .{i}),
-                .float => |f| std.debug.print("number({d})\n", .{f}),
+                .float => |f| std.debug.print("number({e})\n", .{f}),
             },
             .add => std.debug.print("add\n", .{}),
             .sub => std.debug.print("sub\n", .{}),
@@ -870,6 +870,6 @@ pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     switch (result) {
         .integer => |i| try stdout.print("{d}\n", .{i}),
-        .float => |f| try stdout.print("{d}\n", .{f}),
+        .float => |f| try stdout.print("{e}\n", .{f}),
     }
 }
