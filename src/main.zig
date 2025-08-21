@@ -16,6 +16,7 @@ const TokenKind = enum {
 const TokenizeError = error{
     InvalidCharacter,
     InvalidNumber,
+    Overflow,
 } || std.mem.Allocator.Error;
 
 pub const Value = union(enum) {
@@ -40,32 +41,73 @@ fn isSpace(c: u8) bool {
     return std.ascii.isWhitespace(c);
 }
 
-fn isValidNumber(slice: []const u8) bool {
+fn isSign(c: u8) bool {
+    return c == '+' or c == '-';
+}
+
+const NumberScanResult = struct {
+    valid: bool,
+    end_pos: usize,
+    has_dot: bool,
+    has_exp: bool,
+};
+
+fn scanNumber(input: []const u8, start: usize) NumberScanResult {
+    if (start >= input.len) return .{ .valid = false, .end_pos = start, .has_dot = false, .has_exp = false };
+
+    var i = start;
+    var has_dot = false;
+    var has_exp = false;
+    var digits_seen = false;
+
+    // Integer part
+    while (i < input.len and isDigit(input[i])) {
+        digits_seen = true;
+        i += 1;
+    }
+
+    // Decimal point + fractional part (optional)
+    if (i < input.len and input[i] == '.') {
+        has_dot = true;
+        i += 1;
+
+        var frac_seen = false;
+        while (i < input.len and isDigit(input[i])) {
+            frac_seen = true;
+            i += 1;
+        }
+        if (frac_seen) digits_seen = true;
+    }
+
+    // Exponent part (e/E [+-]? DIGITS+) — only allowed when we have digits in integer/fractional part
+    if (digits_seen and i < input.len and (input[i] == 'e' or input[i] == 'E')) {
+        var j = i + 1;
+
+        // Optional sign after e/E
+        while (j < input.len and isSign(input[j])) j += 1;
+
+        var exp_seen = false;
+        while (j < input.len and isDigit(input[j])) {
+            exp_seen = true;
+            j += 1;
+        }
+
+        if (exp_seen) {
+            has_exp = true;
+            i = j; // consume up to exponent part
+        }
+        // If no digits after e/E, don't consume the 'e' - it's not part of the number
+    }
+
+    const valid = digits_seen and (start < i);
+    return .{ .valid = valid, .end_pos = i, .has_dot = has_dot, .has_exp = has_exp };
+}
+
+fn isValidNumberFormat(slice: []const u8) bool {
     if (slice.len == 0) return false;
 
-    // Check for invalid patterns
-    if (slice[0] == '.' and slice.len == 1) return false; // "." alone is invalid
-    if (slice[slice.len - 1] == '.') return false; // ending with "." is invalid (e.g., "1.")
-
-    var dot_count: u32 = 0;
-    for (slice) |c| {
-        if (c == '.') {
-            dot_count += 1;
-            if (dot_count > 1) return false; // multiple dots are invalid
-        } else if (!isDigit(c)) {
-            return false; // non-digit, non-dot characters are invalid
-        }
-    }
-
-    // Must have at least one digit
-    var has_digit = false;
-    for (slice) |c| {
-        if (isDigit(c)) {
-            has_digit = true;
-            break;
-        }
-    }
-    return has_digit;
+    const result = scanNumber(slice, 0);
+    return result.valid and result.end_pos == slice.len;
 }
 
 fn tokenize(allocator: std.mem.Allocator, input: []const u8) TokenizeError!std.ArrayList(Token) {
@@ -131,30 +173,31 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) TokenizeError!std.A
 
         if (isDigit(c) or c == '.') {
             const start = i;
-            var has_dot = false;
-            while (i < input.len) {
-                if (input[i] == '.') {
-                    if (has_dot) break; // a second dot is not allowed
-                    has_dot = true;
-                    i += 1;
-                    continue;
-                }
-                if (!isDigit(input[i])) break;
-                i += 1;
-            }
-            const slice = input[start..i];
+            const scan_result = scanNumber(input, i);
 
-            // Validate the number format before parsing
-            if (!isValidNumber(slice)) {
+            if (!scan_result.valid) {
                 return error.InvalidNumber;
             }
 
-            if (has_dot) {
+            i = scan_result.end_pos;
+            const slice = input[start..i];
+
+            if (scan_result.has_dot or scan_result.has_exp) {
                 const val = std.fmt.parseFloat(f64, slice) catch return error.InvalidNumber;
-                try tokens.append(.{ .kind = .number, .value = .{ .float = val }, .start = start, .end = i });
+                try tokens.append(.{
+                    .kind = .number,
+                    .value = .{ .float = val },
+                    .start = start,
+                    .end = i,
+                });
             } else {
                 const val = std.fmt.parseInt(i64, slice, 10) catch return error.InvalidNumber;
-                try tokens.append(.{ .kind = .number, .value = .{ .integer = val }, .start = start, .end = i });
+                try tokens.append(.{
+                    .kind = .number,
+                    .value = .{ .integer = val },
+                    .start = start,
+                    .end = i,
+                });
             }
             continue;
         }
@@ -256,22 +299,14 @@ fn handleTokenizeError(input: []const u8, err: TokenizeError) void {
                 }
                 if (isDigit(c) or c == '.') {
                     const start = i;
-                    var has_dot = false;
-                    while (i < input.len) {
-                        if (input[i] == '.') {
-                            if (has_dot) break;
-                            has_dot = true;
-                            i += 1;
-                            continue;
-                        }
-                        if (!isDigit(input[i])) break;
-                        i += 1;
-                    }
-                    const slice = input[start..i];
-                    if (!isValidNumber(slice)) {
+                    const scan_result = scanNumber(input, i);
+
+                    if (!scan_result.valid) {
                         printDiagAt(input, start, "invalid number format");
                         return;
                     }
+
+                    i = scan_result.end_pos;
                     continue;
                 }
                 printDiagAt(input, i, "invalid character");
