@@ -491,7 +491,7 @@ pub const EvalError = error{
 };
 
 // Debug options for the calculate function
-pub const DebugOptions = struct {
+const DebugOptions = struct {
     show_tokens: bool = false,
     show_ast: bool = false,
 };
@@ -525,7 +525,10 @@ pub fn calculate(allocator: std.mem.Allocator, expression: []const u8, debug_opt
     }
 
     var parser = Parser{ .tokens = tokens.items, .alloc = ast_alloc, .input = expression };
-    const ast = try parser.parse();
+    const ast = parser.parse() catch |err| {
+        handleParseError(&parser, err);
+        return err;
+    };
 
     // Debug: show AST if requested
     if (debug_options.show_ast) {
