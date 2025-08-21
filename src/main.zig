@@ -497,7 +497,8 @@ const Parser = struct {
     // MulDiv  := Prefix { ('*' | '/' | '%') Prefix }
     // Prefix  := { ('+' | '-') } Power        // Multiple signs allowed, weaker than Power
     // Power   := Primary { '^' Prefix }?       // Right associative
-    // Primary := number | '(' Expr ')'
+    // Primary := number | '(' Expr ')' | FunctionCall
+    // FunctionCall := FunctionName '(' Expr [',' Expr] ')'
     fn parseAddSub(self: *Parser) ParseError!*Node {
         var left = try self.parseMulDiv();
         while (true) {
