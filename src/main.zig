@@ -13,6 +13,11 @@ const TokenKind = enum {
     eof,
 };
 
+const TokenizeError = error{
+    InvalidCharacter,
+    InvalidNumber,
+} || std.mem.Allocator.Error;
+
 pub const Value = union(enum) {
     integer: i64,
     float: f64,
@@ -35,7 +40,35 @@ fn isSpace(c: u8) bool {
     return std.ascii.isWhitespace(c);
 }
 
-fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Token) {
+fn isValidNumber(slice: []const u8) bool {
+    if (slice.len == 0) return false;
+
+    // Check for invalid patterns
+    if (slice[0] == '.' and slice.len == 1) return false; // "." alone is invalid
+    if (slice[slice.len - 1] == '.') return false; // ending with "." is invalid (e.g., "1.")
+
+    var dot_count: u32 = 0;
+    for (slice) |c| {
+        if (c == '.') {
+            dot_count += 1;
+            if (dot_count > 1) return false; // multiple dots are invalid
+        } else if (!isDigit(c)) {
+            return false; // non-digit, non-dot characters are invalid
+        }
+    }
+
+    // Must have at least one digit
+    var has_digit = false;
+    for (slice) |c| {
+        if (isDigit(c)) {
+            has_digit = true;
+            break;
+        }
+    }
+    return has_digit;
+}
+
+fn tokenize(allocator: std.mem.Allocator, input: []const u8) TokenizeError!std.ArrayList(Token) {
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
 
@@ -110,11 +143,17 @@ fn tokenize(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Toke
                 i += 1;
             }
             const slice = input[start..i];
+
+            // Validate the number format before parsing
+            if (!isValidNumber(slice)) {
+                return error.InvalidNumber;
+            }
+
             if (has_dot) {
-                const val = try std.fmt.parseFloat(f64, slice);
+                const val = std.fmt.parseFloat(f64, slice) catch return error.InvalidNumber;
                 try tokens.append(.{ .kind = .number, .value = .{ .float = val }, .start = start, .end = i });
             } else {
-                const val = try std.fmt.parseInt(i64, slice, 10);
+                const val = std.fmt.parseInt(i64, slice, 10) catch return error.InvalidNumber;
                 try tokens.append(.{ .kind = .number, .value = .{ .integer = val }, .start = start, .end = i });
             }
             continue;
@@ -196,6 +235,76 @@ fn tokenKindToStr(kind: TokenKind) []const u8 {
         .rparen => "')'",
         .eof => "end of input",
     };
+}
+
+fn handleTokenizeError(input: []const u8, err: TokenizeError) void {
+    switch (err) {
+        error.InvalidNumber => {
+            // Find the position of the invalid number by re-tokenizing until we hit the error
+            var i: usize = 0;
+            while (i < input.len) {
+                const c = input[i];
+                if (isSpace(c)) {
+                    i += 1;
+                    continue;
+                }
+                if (c == '+' or c == '-' or c == '*' or c == '/' or
+                    c == '%' or c == '^' or c == '(' or c == ')')
+                {
+                    i += 1;
+                    continue;
+                }
+                if (isDigit(c) or c == '.') {
+                    const start = i;
+                    var has_dot = false;
+                    while (i < input.len) {
+                        if (input[i] == '.') {
+                            if (has_dot) break;
+                            has_dot = true;
+                            i += 1;
+                            continue;
+                        }
+                        if (!isDigit(input[i])) break;
+                        i += 1;
+                    }
+                    const slice = input[start..i];
+                    if (!isValidNumber(slice)) {
+                        printDiagAt(input, start, "invalid number format");
+                        return;
+                    }
+                    continue;
+                }
+                printDiagAt(input, i, "invalid character");
+                return;
+            }
+        },
+        error.InvalidCharacter => {
+            // Find the position of the invalid character
+            var i: usize = 0;
+            while (i < input.len) {
+                const c = input[i];
+                if (isSpace(c)) {
+                    i += 1;
+                    continue;
+                }
+                if (c == '+' or c == '-' or c == '*' or c == '/' or c == '%' or c == '^' or c == '(' or c == ')') {
+                    i += 1;
+                    continue;
+                }
+                if (isDigit(c) or c == '.') {
+                    while (i < input.len and (isDigit(input[i]) or input[i] == '.')) {
+                        i += 1;
+                    }
+                    continue;
+                }
+                printDiagAt(input, i, "invalid character");
+                return;
+            }
+        },
+        else => {
+            std.debug.print("tokenize error: {s}\n", .{@errorName(err)});
+        },
+    }
 }
 
 fn handleParseError(parser: *const Parser, err: ParseError) void {
@@ -502,7 +611,10 @@ pub fn calculate(allocator: std.mem.Allocator, expression: []const u8, debug_opt
     defer arena.deinit();
     const ast_alloc = arena.allocator();
 
-    var tokens = try tokenize(allocator, expression);
+    var tokens = tokenize(allocator, expression) catch |err| {
+        handleTokenizeError(expression, err);
+        return err;
+    };
     defer tokens.deinit();
 
     // Debug: show tokens if requested
@@ -714,7 +826,10 @@ pub fn main() !void {
     };
 
     // Calculate the result using the unified API
-    const result = try calculate(galloc, expr, debug_options);
+    const result = calculate(galloc, expr, debug_options) catch {
+        // Error messages have already been printed by the error handlers
+        std.process.exit(1);
+    };
 
     // Output final result to stdout
     const stdout = std.io.getStdOut().writer();
