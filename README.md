@@ -1,7 +1,7 @@
 # calc — a tiny expression calculator in Zig
 
 `calc` is a small CLI evaluator for arithmetic expressions, written in Zig.
-It supports integers, floating‑point numbers, parentheses, unary signs, and the binary operators `+ - * / % ^`.
+It supports integers, floating‑point numbers, exponential notation, parentheses, unary signs, and the binary operators `+ - * / % ^`.
 You can also inspect the token stream and the abstract syntax tree (AST) for debugging.
 
 **Highlights**
@@ -85,14 +85,14 @@ Expr    := AddSub
 AddSub  := MulDiv { ('+' | '-') MulDiv }
 MulDiv  := Prefix { ('*' | '/' | '%') Prefix }
 Prefix  := { ('+' | '-') } Power        // multiple signs allowed; weaker than Power
-Power   := Primary { '^' Power }?       // right-associative
+Power   := Primary { '^' Prefix }?       // right-associative
 Primary := number | '(' Expr ')'
 ```
 ---
 
 ## Semantics
 
-* **Numeric literals:** decimal only, with at most one dot (e.g., `123`, `3.14`). Scientific notation (e.g., `1e3`) is **not** supported.
+* **Numeric literals:** decimal numbers with optional exponential notation (e.g., `123`, `3.14`, `1e3`, `2.5E-4`). Both `e` and `E` are supported for exponents, with optional `+` or `-` signs.
 * **Type promotion:**
 
   * Integer `+ - *` integer → integer (checked; overflow → error)
@@ -112,7 +112,7 @@ Primary := number | '(' Expr ')'
 * `ExpectedPrimary` — expected a number or `(` but found something else
 * `ExpectedRParen` — missing `)`
 * `TrailingInput` — leftover tokens after a complete expression
-* `InvalidCharacter` — unrecognized character during tokenization (e.g., the `e` in `1e3`)
+* `InvalidCharacter` — unrecognized character during tokenization (e.g., `@`, `#`, `$`)
 
 The program exits non‑zero on errors.
 
@@ -142,5 +142,5 @@ calc "(-2)^2"        # 4
 
 # Error examples
 calc "10 % 2.0"      # FloatModulo
-calc "1e3"           # InvalidCharacter
+calc "1@2"           # InvalidCharacter
 ```
