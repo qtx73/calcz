@@ -11,7 +11,6 @@ You can also inspect the token stream and the abstract syntax tree (AST) for deb
 * **Mathematical functions**: `abs`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `ln`
 * **Built-in constants**: `pi`, `e`
 * `--tokens` and `--ast` flags for introspection
-* **Public API** for library usage
 
 ---
 
@@ -218,36 +217,3 @@ calc "1@2"               # InvalidCharacter
 
 ---
 
-## Library Usage
-
-The calculator provides a public API for use as a library:
-
-```zig
-const std = @import("std");
-const calc = @import("main.zig");
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    
-    const debug_options = calc.DebugOptions{
-        .show_tokens = false,
-        .show_ast = false,
-    };
-    
-    const result = try calc.calculate(allocator, "sqrt(16) + sin(pi/2)", debug_options);
-    
-    switch (result) {
-        .integer => |i| std.debug.print("Result: {d}\n", .{i}),
-        .float => |f| std.debug.print("Result: {e}\n", .{f}),
-    }
-}
-```
-
-**API Functions:**
-- `calculate(allocator, expression, debug_options)` — Main calculation function
-- `DebugOptions` — Struct for controlling debug output (`show_tokens`, `show_ast`)
-- `Value` — Union type representing either `i64` or `f64` results
-
----
