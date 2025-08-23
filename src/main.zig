@@ -1026,6 +1026,28 @@ fn evalFunction(name: []const u8, args: []const *const Node) EvalError!Value {
     }
 }
 
+fn writeJsonl(path: []const u8, expr: []const u8, result: []const u8) !void {
+    var file: std.fs.File = undefined;
+    if (std.fs.path.isAbsolute(path)) {
+        file = try std.fs.createFileAbsolute(path, .{ .truncate = false });
+    } else {
+        file = try std.fs.cwd().createFile(path, .{ .truncate = false });
+    }
+    defer file.close();
+
+    const end_pos = try file.getEndPos();
+    try file.seekTo(end_pos);
+
+    const w = file.writer();
+    const Recode = struct {
+        expr: []const u8,
+        result: []const u8,
+    };
+
+    try std.json.stringify(Recode{ .expr = expr, .result = result }, .{}, w);
+    try w.writeByte('\n');
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -1036,6 +1058,7 @@ pub fn main() !void {
 
     var show_tokens = false;
     var show_ast = false;
+    var log_enable = true;
     var expr: []const u8 = undefined;
     var expr_set = false;
 
@@ -1048,6 +1071,8 @@ pub fn main() !void {
             show_tokens = true;
         } else if (std.mem.eql(u8, arg, "--ast")) {
             show_ast = true;
+        } else if (std.mem.eql(u8, arg, "--logoff")) {
+            log_enable = false;
         } else {
             expr = arg;
             expr_set = true;
@@ -1086,5 +1111,20 @@ pub fn main() !void {
     switch (result) {
         .integer => |i| try stdout.print("{d}\n", .{i}),
         .float => |f| try stdout.print("{e}\n", .{f}),
+    }
+
+    if (log_enable) {
+        const result_str = switch (result) {
+            .integer => |i| try std.fmt.allocPrint(galloc, "{d}", .{i}),
+            .float => |f| try std.fmt.allocPrint(galloc, "{e}", .{f}),
+        };
+        defer galloc.free(result_str);
+
+        var exe_buf: [1024]u8 = undefined;
+        const exe_path = try std.fs.selfExePath(exe_buf[0..]);
+        const exe_dir = std.fs.path.dirname(exe_path) orelse ".";
+        const path: []u8 = try std.fs.path.join(galloc, &[_][]const u8{ exe_dir, "result.jsonl" });
+        defer galloc.free(path);
+        try writeJsonl(path, expr, result_str);
     }
 }
