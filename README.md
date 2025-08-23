@@ -33,7 +33,7 @@ zig build
 ## Usage
 
 ```
-calc [--tokens] [--ast] <expr>
+calc [--tokens] [--ast] [--logoff] <expr>
 # or (when no <expr> is given) read the expression from STDIN
 echo "1 + (2 * 3)" | calc
 ```
@@ -42,6 +42,7 @@ Flags:
 
 * `--tokens` – print the token stream, one per line
 * `--ast` – print the AST as an ASCII tree
+* `--logoff` – disable automatic logging to result.jsonl
 
 When reading from STDIN, leading/trailing whitespace (including newlines) is trimmed. Maximum STDIN size is 1 MiB.
 
@@ -84,6 +85,37 @@ calc "e ^ 2"            # 7.38905609893065e+00
 calc "sin(pi/2)"        # 1e+00
 calc "ln(e)"            # 1e+00
 ```
+
+---
+
+## Calculation Logging
+
+By default, `calc` automatically logs all calculations to a `result.jsonl` file in the same directory as the executable. Each calculation is stored as a JSON object with the expression and result.
+
+**Log Format:**
+```json
+{"expr":"2 + 3","result":"5"}
+{"expr":"sqrt(16)","result":"4e+00"}
+{"expr":"pi * 2","result":"6.283185307179586e+00"}
+```
+
+**Controlling Logging:**
+- **Enable logging** (default): Just run calculations normally
+- **Disable logging**: Use the `--logoff` flag
+
+**Examples:**
+```bash
+# Normal operation - logs to result.jsonl
+calc "2 ^ 10"
+
+# Disable logging
+calc --logoff "2 ^ 10"
+
+# View the log file
+cat result.jsonl
+```
+
+The log file is created automatically and calculations are appended to it. This is useful for keeping a history of your calculations or for debugging purposes.
 
 ---
 
@@ -201,6 +233,11 @@ calc --tokens "sin(pi)"
 # AST
 calc --ast "sqrt(abs(-16))"
 
+# Logging
+calc "2 ^ 10"            # Logs to result.jsonl
+calc --logoff "2 ^ 10"   # No logging
+cat result.jsonl         # View calculation history
+
 # Right-associative power
 calc "2 ^ 3 ^ 2"         # 512
 
@@ -216,4 +253,3 @@ calc "1@2"               # InvalidCharacter
 ```
 
 ---
-
