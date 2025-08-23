@@ -10,6 +10,7 @@ You can also inspect the token stream and the abstract syntax tree (AST) for deb
 * Accepts input via **command‑line argument** or **STDIN (up to 1 MiB)**
 * **Mathematical functions**: `abs`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `log`, `ln`
 * **Built-in constants**: `pi`, `e`
+* **Automatic calculation logging** to JSONL format with `--logoff` option to disable
 * `--tokens` and `--ast` flags for introspection
 
 ---
